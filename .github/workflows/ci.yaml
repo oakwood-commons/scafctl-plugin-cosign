@@ -37,7 +37,34 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: |
+          set +e
+          output=$(go run golang.org/x/vuln/cmd/govulncheck@latest ./... 2>&1)
+          status=$?
+          echo "$output"
+          # Reachable advisories with no fixable version, waived with rationale.
+          # Any advisory NOT listed here fails the build — the waiver list is a
+          # documented exception, not an off-switch.
+          #   GO-2026-5932  golang.org/x/crypto/openpgp is unmaintained-by-design
+          #                 (will-not-fix upstream). Reached through cosign's key loader
+          #                 (PGP key format support) init chains; this plugin never parses
+          #                 untrusted PGP input. Clears when cosign drops its openpgp imports.
+          #   GO-2026-4529  cosign verify: signatures considered valid with expired
+          #                 intermediate certs when tlog verification is skipped.
+          #                 Verify-side behavior — this plugin signs, it does not verify.
+          #                 Fix unreleased (v2.6.5 is latest); revisit on the next cosign release.
+          waived='GO-2026-5932|GO-2026-4529'
+          nonwaived=$(echo "$output" | grep 'Vulnerability #' | grep -Ev "$waived" || true)
+          if [ -n "$nonwaived" ]; then
+            echo "::error::govulncheck found reachable vulnerabilities that are not waived"
+            echo "$nonwaived"
+            exit 1
+          fi
+          # Exit status: 0 clean, 3 findings (all waived above); anything else is a tool failure.
+          if [ "$status" -ne 0 ] && [ "$status" -ne 3 ]; then
+            echo "::error::govulncheck failed to run (exit $status)"
+            exit "$status"
+          fi
 
   test:
     name: Test

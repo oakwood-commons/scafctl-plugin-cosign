@@ -7,6 +7,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -528,7 +530,9 @@ func TestSign_Keyless_AmbientToken(t *testing.T) {
 }
 
 func BenchmarkSign(b *testing.B) {
-	reg := registry.New()
+	// Silence the registry's request logging: it interleaves with benchmark
+	// output and breaks benchstat parsing in the PR benchmark comparison.
+	reg := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
 	srv := httptest.NewServer(reg)
 	defer srv.Close()
 
