@@ -178,7 +178,6 @@ func assertSignature(t *testing.T, srv *httptest.Server, repo string, subjectDig
 	payloadDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(expectedPayload))
 
 	var found map[string]any
-	var foundDigest string
 	for _, r := range m.Manifests {
 		rm := referrerManifest(t, repoRef, r.Digest.String())
 		layers, _ := rm["layers"].([]any)
@@ -188,7 +187,6 @@ func assertSignature(t *testing.T, srv *httptest.Server, repo string, subjectDig
 		l0, _ := layers[0].(map[string]any)
 		if l0["digest"] == payloadDigest {
 			found = rm
-			foundDigest = r.Digest.String()
 			break
 		}
 	}
@@ -215,8 +213,6 @@ func assertSignature(t *testing.T, srv *httptest.Server, repo string, subjectDig
 	require.NoError(t, err)
 	require.NoError(t, key.sv.VerifySignature(bytes.NewReader(sigBytes), bytes.NewReader(expectedPayload)),
 		"signature must verify against the signing key")
-
-	_ = foundDigest
 }
 
 // nestedMediaType digs out manifest.config.mediaType.
