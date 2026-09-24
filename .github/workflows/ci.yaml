@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.13.2
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: Run govulncheck
+        run: |
+          # NOTE: `go run` relays the wrapped binary's exit status (findings = 3)
+          # as its own exit 1, so the gate below reads the report text, not the
+          # exit code.
+          output=$(go run golang.org/x/vuln/cmd/govulncheck@latest ./... 2>&1 || true)
+          echo "$output"
+          # Completion sentinel: a run that produced no report must fail loudly,
+          # otherwise a broken govulncheck would pass silently.
+          if ! echo "$output" | grep -Eq 'No vulnerabilities found|^Your code is affected by'; then
+            echo "::error::govulncheck produced no report"
+            exit 1
+          fi
+          # Reachable advisories with no fixable version, waived with rationale.
+          # Any advisory NOT listed here fails the build — the waiver list is a
+          # documented exception, not an off-switch.
+          #   GO-2026-5932  golang.org/x/crypto/openpgp is unmaintained-by-design
+          #                 (will-not-fix upstream). Reached through cosign's key loader
+          #                 (PGP key format support) init chains; this plugin never parses
+          #                 untrusted PGP input. Clears when cosign drops its openpgp imports.
+          #   GO-2026-4529  cosign verify: signatures considered valid with expired
+          #                 intermediate certs when tlog verification is skipped.
+          #                 Verify-side behavior — this plugin signs, it does not verify.
+          #                 Fix unreleased (v2.6.5 is latest); revisit on the next cosign release.
+          waived='GO-2026-5932|GO-2026-4529'
+          nonwaived=$(echo "$output" | grep 'Vulnerability #' | grep -Ev "$waived" || true)
+          if [ -n "$nonwaived" ]; then
+            echo "::error::govulncheck found reachable vulnerabilities that are not waived"
+            echo "$nonwaived"
+            exit 1
+          fi
+
+  test:
+    name: Test
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Upload coverage
+        if: github.event_name == 'push'
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.out
+          fail_ci_if_error: false

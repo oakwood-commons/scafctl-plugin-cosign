@@ -1,0 +1,92 @@
+# Example: Publish and sign an arbitrary OCI 1.1 artifact.
+#
+# Chains the oci provider's push-artifact with the cosign provider's sign:
+# the push publishes the artifact, the sign resolves the same tag ref to its
+# digest and attaches a signature referrer (verification-ready for
+# `cosign verify --registry-referrers-mode oci-1-1`).
+#
+# Setup:
+#   task release:local VERSION=0.1.0   # in this repo AND scafctl-plugin-oci
+#   scafctl plugins install -f examples/sign.yaml
+#
+# Run:
+#   scafctl run solution -f examples/sign.yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cosign-sign-example
+  version: 1.0.0
+  description: Push an OCI 1.1 artifact, then sign it by digest.
+
+bundle:
+  plugins:
+    - name: oci
+      kind: provider
+      version: ">=0.3.0"
+    - name: cosign
+      kind: provider
+      version: ">=0.1.0"
+
+spec:
+  resolvers:
+    target:
+      type: string
+      description: Destination artifact reference (the sign action resolves this tag to a digest)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ghcr.io/myorg/my-artifact:latest
+
+    payloadFile:
+      type: string
+      description: Local file whose raw bytes become the artifact layer
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ./payload.yaml
+
+    signingKey:
+      type: string
+      description: cosign private key reference (file path, env://VAR, k8s://secret, or KMS ref)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: env://COSIGN_SIGNING_KEY
+
+  workflow:
+    actions:
+      push-artifact:
+        description: Assemble and push the OCI 1.1 artifact
+        provider: oci
+        inputs:
+          operation: push-artifact
+          ref: "{{ .resolvers.target }}"
+          artifact_type: "application/vnd.example.thing.v1"
+          config_media_type: "application/vnd.example.config.v1+json"
+          config_inline: '{"kind":"thing"}'
+          annotations:
+            org.opencontainers.image.source: "https://github.com/myorg/my-repo"
+          artifact_layers:
+            - path: "{{ .resolvers.payloadFile }}"
+              media_type: "application/vnd.example.payload.v1+yaml"
+              annotations:
+                org.opencontainers.image.title: "payload.yaml"
+
+      sign-artifact:
+        description: Sign the pushed artifact's digest and attach a signature referrer
+        needs: [push-artifact]
+        provider: cosign
+        inputs:
+          operation: sign
+          # The tag ref is resolved to its digest first; the digest is what
+          # gets signed. Pass the resolved digest ref instead if you have it.
+          ref: "{{ .resolvers.target }}"
+          key: "{{ .resolvers.signingKey }}"
+          # For keyless signing instead, drop key and set:
+          #   fulcio_url: https://fulcio.sigstore.dev
+          #   rekor_url: https://rekor.sigstore.dev
+          annotations:
+            org.opencontainers.image.source: "https://github.com/myorg/my-repo"
