@@ -93,7 +93,7 @@ func TestScafctlKeychain_Resolve(t *testing.T) {
 	t.Setenv("USERPROFILE", tmpDir)
 	t.Setenv("XDG_RUNTIME_DIR", "")
 
-	// Rename "scafctl" subdir structure — scafctlConfigPath expects <xdg>/scafctl/registries.json.
+	// Rename "scafctl" subdir structure — configPath("scafctl", ...) expects <xdg>/scafctl/registries.json.
 	scafctlDir := filepath.Join(tmpDir, "scafctl")
 	require.NoError(t, os.MkdirAll(scafctlDir, 0o750))
 	require.NoError(t, os.Rename(regFile, filepath.Join(scafctlDir, "registries.json")))
@@ -212,10 +212,10 @@ func TestDefaultScopeForHandler(t *testing.T) {
 	assert.Empty(t, defaultScopeForHandler("unknown"))
 }
 
-func TestScafctlConfigPath_XDGOverride(t *testing.T) {
+func TestConfigPath_XDGOverride(t *testing.T) {
 	// When XDG_CONFIG_HOME is set, it takes priority over HOME.
 	t.Setenv("XDG_CONFIG_HOME", "/custom/config")
-	path := scafctlConfigPath("registries.json")
+	path := configPath("scafctl", "registries.json")
 	assert.Equal(t, filepath.Join("/custom/config", "scafctl", "registries.json"), path)
 }
 

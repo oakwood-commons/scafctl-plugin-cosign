@@ -288,11 +288,6 @@ func configPath(app, filename string) string {
 	return filepath.Join(home, ".config", app, filename)
 }
 
-// scafctlConfigPath returns the path to a file in scafctl's config directory.
-func scafctlConfigPath(filename string) string {
-	return configPath("scafctl", filename)
-}
-
 // scafctlAuthFilePaths returns candidate paths for scafctl's container auth files.
 func scafctlAuthFilePaths() []string {
 	home, err := os.UserHomeDir()

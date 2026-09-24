@@ -190,10 +190,3 @@ func TestToInt(t *testing.T) {
 		})
 	}
 }
-
-func TestIsNotFoundErr(t *testing.T) {
-	assert.True(t, isNotFoundErr(&transport.Error{StatusCode: 404}))
-	assert.False(t, isNotFoundErr(&transport.Error{StatusCode: 500}))
-	assert.False(t, isNotFoundErr(errors.New("boom")))
-	assert.False(t, isNotFoundErr(nil))
-}

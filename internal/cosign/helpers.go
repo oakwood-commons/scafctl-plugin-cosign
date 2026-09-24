@@ -84,15 +84,6 @@ func parseRetry(input map[string]any) ([]remote.Option, error) {
 	return []remote.Option{remote.WithRetryBackoff(backoff)}, nil
 }
 
-// isNotFoundErr reports whether err is a registry 404 (manifest or blob absent).
-func isNotFoundErr(err error) bool {
-	var terr *transport.Error
-	if errors.As(err, &terr) {
-		return terr.StatusCode == http.StatusNotFound
-	}
-	return false
-}
-
 // mapRegistryError augments cryptic registry/transport errors with actionable
 // guidance while preserving the original error via %w.
 func mapRegistryError(context string, err error) error {
