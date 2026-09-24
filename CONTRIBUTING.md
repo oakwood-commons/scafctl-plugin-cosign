@@ -22,7 +22,7 @@ git commit -s -S -m "feat: add new feature"
 
 ### Prerequisites
 
-- Go 1.26.3+
+- Go 1.27.1 (matches the `go` directive in `go.mod`)
 - [Task](https://taskfile.dev/) (go-task)
 - golangci-lint
 
