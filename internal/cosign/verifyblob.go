@@ -130,10 +130,19 @@ func (p *Plugin) executeVerifyBlob(ctx context.Context, input map[string]any) (*
 	if co.NewBundleFormat {
 		bundleVerified, err = p.verifyBlobBundle(ctx, co, blobBytes, cfg)
 	} else {
-		// Keyless whenever no explicit key: a certificate input, or a
-		// bundle carrying one. Both fetch CT log keys for the SCT check.
-		if err = setLegacyVerifyTrust(ctx, co, cfg, cfg.key == ""); err != nil {
-			return nil, err
+		// Trust anchors (Fulcio roots, CT log keys) apply to keyless
+		// verification only: a certificate, or a bundle carrying one —
+		// exactly cosign's keylessVerification gate.
+		if cfg.key == "" {
+			if err = setLegacyVerifyTrust(ctx, co, cfg); err != nil {
+				return nil, err
+			}
+			// CT log keys for the embedded-SCT check on keyless certificates,
+			// via the same TUF client.
+			co.CTLogPubKeys, err = pkgcosign.GetCTLogPubs(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("verify-blob: getting CT log public keys: %w", err)
+			}
 		}
 		bundleVerified, err = p.verifyBlobLegacy(ctx, co, blobBytes, cfg, cert)
 	}
@@ -211,11 +220,12 @@ func (p *Plugin) verifyBlobBundle(ctx context.Context, co *pkgcosign.CheckOpts, 
 	return true, nil
 }
 
-// setLegacyVerifyTrust assembles the certificate-trust fields for the legacy
-// path: explicit PEM pools from ca_roots/ca_intermediates/certificate_chain,
-// and CT log keys for keyless. Mirrors cosign's loadCertsKeylessVerification
-// and shouldVerifySCT wiring, minus hardware-token branches.
-func setLegacyVerifyTrust(ctx context.Context, co *pkgcosign.CheckOpts, cfg *verifyBlobConfig, keyless bool) error {
+// setLegacyVerifyTrust assembles the certificate-trust fields for keyless
+// verification: explicit PEM pools from ca_roots/ca_intermediates or
+// certificate_chain when given, the sigstore TUF client's Fulcio roots and
+// CT log keys otherwise (mirror of cosign's loadCertsKeylessVerification and
+// shouldVerifySCT wiring). Never called for key-based verification.
+func setLegacyVerifyTrust(ctx context.Context, co *pkgcosign.CheckOpts, cfg *verifyBlobConfig) error {
 	var err error
 	switch {
 	case cfg.certChain != "":
@@ -269,12 +279,11 @@ func setLegacyVerifyTrust(ctx context.Context, co *pkgcosign.CheckOpts, cfg *ver
 		}
 	}
 
-	if keyless {
-		var err error
-		co.CTLogPubKeys, err = pkgcosign.GetCTLogPubs(ctx)
-		if err != nil {
-			return fmt.Errorf("verify-blob: getting CT log public keys: %w", err)
-		}
+	// CT log keys for the embedded-SCT check on keyless certificates, via
+	// the same TUF client.
+	co.CTLogPubKeys, err = pkgcosign.GetCTLogPubs(ctx)
+	if err != nil {
+		return fmt.Errorf("verify-blob: getting CT log public keys: %w", err)
 	}
 	return nil
 }

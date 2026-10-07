@@ -196,7 +196,7 @@ func TestSetLegacyVerifyTrust_PoolConstruction(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			co := &pkgcosign.CheckOpts{}
-			require.NoError(t, setLegacyVerifyTrust(context.Background(), co, &tt.cfg, false))
+			require.NoError(t, setLegacyVerifyTrust(context.Background(), co, &tt.cfg))
 
 			wantRootPool := x509.NewCertPool()
 			wantRootPool.AddCert(tt.wantRoot)
