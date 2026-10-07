@@ -6,10 +6,12 @@
 # check stops the workflow before anything is published.
 #
 # Setup:
-#   # A cosign key pair + the public half exported:
+#   # A cosign key pair, with the key material itself in the env vars
+#   # (an env://VAR reference hands cosign the var's CONTENT as the PEM,
+#   # not a path to it):
 #   cosign generate-key-pair && cosign public-key --key cosign.key > cosign.pub
-#   export COSIGN_SIGNING_KEY=./cosign.key
-#   export COSIGN_PUBLIC_KEY_PEM=file://$(pwd)/cosign.pub   # or paste the PEM into the env var
+#   export COSIGN_SIGNING_KEY="$(cat cosign.key)"
+#   export COSIGN_PUBLIC_KEY_PEM="$(cat cosign.pub)"
 #
 # Run:
 #   scafctl run solution -f examples/sign-blob.yaml
