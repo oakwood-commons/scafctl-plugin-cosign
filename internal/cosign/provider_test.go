@@ -408,6 +408,17 @@ func TestDescribeWhatIf(t *testing.T) {
 		assert.Contains(t, msg, "returning an error if verification fails")
 	})
 
+	t.Run("verify-blob string ignore_tlog coerced like execution", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"path":        "./dist/SHA256SUMS",
+			"key":         "./cosign.pub",
+			"ignore_tlog": "true",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "without checking the Rekor transparency log")
+	})
+
 	t.Run("verify-blob keyless pinned identity", func(t *testing.T) {
 		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
 			"operation":               OpVerifyBlob,

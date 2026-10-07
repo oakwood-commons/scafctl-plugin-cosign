@@ -236,7 +236,14 @@ func (p *Plugin) DescribeWhatIf(_ context.Context, providerName string, input ma
 			parts = append(parts, fmt.Sprintf("using the bundle %s when needed", bundle))
 		}
 
-		ignoreTlog, _ := input["ignore_tlog"].(bool)
+		// Coerce like the execution path (parseVerifyBlobConfig) rather
+		// than a raw .(bool) assert, so a string ignore_tlog=true from
+		// the CLI describes the tlog skip correctly here too. Type
+		// validity was already checked by whatIfBool above.
+		ignoreTlog := false
+		if raw, ok := input["ignore_tlog"]; ok {
+			ignoreTlog, _ = toBool(raw)
+		}
 		if ignoreTlog {
 			parts = append(parts, "without checking the Rekor transparency log")
 		} else if rekorURL, _ := input["rekor_url"].(string); rekorURL != "" {
