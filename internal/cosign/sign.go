@@ -454,6 +454,9 @@ func parseSignConfig(input map[string]any) (*signConfig, error) {
 
 	cfg := &signConfig{ref: refStr}
 	cfg.key, _ = input["key"].(string)
+	if err := validateKeyRef(cfg.key); err != nil {
+		return nil, err
+	}
 	cfg.oidcHandler, _ = input["oidc_handler"].(string)
 	cfg.rekorURL, _ = input["rekor_url"].(string)
 
