@@ -103,7 +103,7 @@ scafctl run provider cosign operation=sign \
 
 ### Key-based signing
 
-`key` accepts everything cosign's key references support: an encrypted cosign key file (`cosign generate-key-pair` format), `env://VAR` holding a PEM, `k8s://namespace/secret` (secret with `cosign.key`/`cosign.password` data), and KMS references (`gcpkms://`, `awskms://`, `azurekms://`, `hashivault://`). The KMS backends are linked into the plugin binary, so KMS references are resolved by the sigstore libraries **in-process** — no external helper binaries. Any other `scheme://` key reference is rejected with a clear error rather than falling through to sigstore's external-program KMS fallback, keeping the no-shell guarantee. (Hardware tokens (`pkcs11:`) and `gitlab://` references are not supported in this build.)
+`key` accepts everything cosign's key references support: an encrypted cosign key file (`cosign generate-key-pair` format), `env://VAR` holding a PEM, `k8s://namespace/secret` (secret with `cosign.key`/`cosign.password` data), and KMS references (`gcpkms://`, `awskms://`, `azurekms://`, `hashivault://`). The KMS backends are linked into the plugin binary, so KMS references are resolved by the sigstore libraries **in-process** — no external helper binaries. Any other `scheme://` key reference is rejected with a clear error rather than falling through to sigstore's external-program KMS fallback, keeping the no-shell guarantee. (Hardware tokens (`pkcs11:`) and `gitlab://` references are not supported in this build; `env://` and `http(s)://` references follow sigstore's own loader behavior, including its optional plugin-binary extension probe for those two schemes only.)
 
 Password-protected keys read their password from the `COSIGN_PASSWORD` environment variable — the plugin never prompts, so CI must not hang on an interactive prompt.
 
@@ -258,13 +258,13 @@ task bench       # Run benchmarks
 AC #1 interoperability is not gated on a `cosign` binary:
 
 - For `sign`, `TestSign_VerifiesWithCosignLibraries_OCI11` (and the legacy-mode twin) signs through the plugin and verifies through cosign's own `VerifyImageSignatures` — the identical code path `cosign verify --registry-referrers-mode oci-1-1` runs, invoked as a library.
-- For `sign-blob` / `verify-blob`, `TestSignBlob_VerifiesWithCosignVerifyBlob` and friends sign through the plugin and verify through cosign's own `VerifyBlobCmd` — the code behind `cosign verify-blob`. KMS-referenced keys are covered the same way through sigstore's in-memory fake KMS (`fakekms://`), over the same registration path the real KMS backends use.
+- For `sign-blob` / `verify-blob`, `TestSignBlob_VerifiesWithCosignVerifyBlob` and friends sign through the plugin and verify through cosign's own `VerifyBlobCmd` — the code behind `cosign verify-blob`. KMS-referenced keys are covered the same way through sigstore's in-memory fake KMS (`fakekms://`), over the same registration path the real KMS backends use. The sigstore protobuf-bundle verify path is covered offline too, against sigstore-go's virtual sigstore as the trusted root (`TestVerifyBlob_BundleSigstore_KeyBased`).
 
 The tests run in normal CI on any machine; only the libraries change, never a binary.
 
 ### Live-endpoint tests (env-gated)
 
-Keyless signing against live sigstore endpoints is the only part that needs real infrastructure — for both `sign` (`TestSign_Keyless_AmbientToken`) and `sign-blob` (`TestSignBlob_Keyless_AmbientToken`):
+Keyless signing against live sigstore endpoints is the only part that needs real infrastructure — for `sign` (`TestSign_Keyless_AmbientToken`), `sign-blob` (`TestSignBlob_Keyless_AmbientToken`), and keyless `verify-blob` (`TestVerifyBlob_Keyless_AmbientToken`):
 
 ```bash
 COSIGN_TEST_FULCIO_URL=https://fulcio.sigstore.dev \

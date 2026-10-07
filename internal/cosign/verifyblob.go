@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	sdkprovider "github.com/oakwood-commons/scafctl-plugin-sdk/provider"
+	fulciocli "github.com/sigstore/cosign/v2/cmd/cosign/cli/fulcio"
 	rekocli "github.com/sigstore/cosign/v2/cmd/cosign/cli/rekor"
 	pkgcosign "github.com/sigstore/cosign/v2/pkg/cosign"
 	cbundle "github.com/sigstore/cosign/v2/pkg/cosign/bundle"
@@ -83,7 +84,11 @@ func (p *Plugin) executeVerifyBlob(ctx context.Context, input map[string]any) (*
 	co := &pkgcosign.CheckOpts{
 		IgnoreTlog:      cfg.ignoreTlog,
 		NewBundleFormat: cfg.bundleFormat == BundleFormatSigstore,
-		Identities:      cfg.identities(),
+	}
+	// Identities only apply to keyless verification; with a key they would
+	// make VerifyNewBundle require a certificate identity (mirrors stock).
+	if cfg.key == "" {
+		co.Identities = cfg.identities()
 	}
 
 	if co.TrustedMaterial, err = loadTrustedMaterial(cfg); err != nil {
@@ -125,7 +130,9 @@ func (p *Plugin) executeVerifyBlob(ctx context.Context, input map[string]any) (*
 	if co.NewBundleFormat {
 		bundleVerified, err = p.verifyBlobBundle(ctx, co, blobBytes, cfg)
 	} else {
-		if err = setLegacyVerifyTrust(ctx, co, cfg, cert != nil); err != nil {
+		// Keyless whenever no explicit key: a certificate input, or a
+		// bundle carrying one. Both fetch CT log keys for the SCT check.
+		if err = setLegacyVerifyTrust(ctx, co, cfg, cfg.key == ""); err != nil {
 			return nil, err
 		}
 		bundleVerified, err = p.verifyBlobLegacy(ctx, co, blobBytes, cfg, cert)
@@ -209,6 +216,7 @@ func (p *Plugin) verifyBlobBundle(ctx context.Context, co *pkgcosign.CheckOpts, 
 // and CT log keys for keyless. Mirrors cosign's loadCertsKeylessVerification
 // and shouldVerifySCT wiring, minus hardware-token branches.
 func setLegacyVerifyTrust(ctx context.Context, co *pkgcosign.CheckOpts, cfg *verifyBlobConfig, keyless bool) error {
+	var err error
 	switch {
 	case cfg.certChain != "":
 		chain, err := loadCertChainFromFile(cfg.certChain)
@@ -244,6 +252,20 @@ func setLegacyVerifyTrust(ctx context.Context, co *pkgcosign.CheckOpts, cfg *ver
 			for _, c := range inters {
 				co.IntermediateCerts.AddCert(c)
 			}
+		}
+	default:
+		// Online fetch of the Fulcio roots and intermediates through the
+		// sigstore TUF client: keyless certificates (Ed25519-signed by
+		// Fulcio) cannot be verified without a trust anchor, and none was
+		// given. Mirrors `cosign verify-blob`'s own default branch; cached
+		// under ~/.sigstore / ~/.cache/sigstore after the first fetch.
+		co.RootCerts, err = fulciocli.GetRoots()
+		if err != nil {
+			return fmt.Errorf("verify-blob: getting Fulcio roots (pass ca_roots or certificate_chain for private deployments): %w", err)
+		}
+		co.IntermediateCerts, err = fulciocli.GetIntermediates()
+		if err != nil {
+			return fmt.Errorf("verify-blob: getting Fulcio intermediates: %w", err)
 		}
 	}
 

@@ -39,6 +39,14 @@ var selfHandledKeyPrefixes = []string{
 // this provider must never perform. Registered KMS backends (gcpkms://,
 // awskms://, azurekms://, hashivault://), env://, http(s)://, k8s://
 // references, and plain file paths all pass.
+//
+// Residual, accepted: for env:// and http(s):// references sigstore's KMS
+// resolver still probes for a sigstore-kms-env / sigstore-kms-http binary
+// before falling back to its own blob loader (sigstore kms.Get consults the
+// cliplugin for any ref containing "://"). That is sigstore's own behavior,
+// identical to the stock CLI: the probe only matters if someone deliberately
+// installs a plugin binary with that exact name, which is then a supported
+// sigstore extension mechanism, not an escape hatch.
 func validateKeyRef(keyRef string) error {
 	if keyRef == "" {
 		return nil

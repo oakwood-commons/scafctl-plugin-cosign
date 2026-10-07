@@ -321,7 +321,7 @@ func buildInputSchema() *jsonschema.Schema {
 				sdkhelper.WithExample("ghcr.io/myorg/myapp@sha256:abc123..."),
 			),
 			"path": sdkhelper.StringProp(
-				"Blob source for sign-blob and verify-blob: a local file path, streamed through the signer without being fully buffered",
+				"Blob source for sign-blob and verify-blob: a local file path (sign-blob streams it through the signer; verify-blob reads it into memory, like cosign's blobRef)",
 				sdkhelper.WithExample("./dist/SHA256SUMS"),
 			),
 			"content": sdkhelper.StringProp(
@@ -416,7 +416,7 @@ func buildInputSchema() *jsonschema.Schema {
 				"Path to a sigstore trusted_root.json; required with bundle_format sigstore (verify-blob)",
 			),
 			"ignore_tlog": sdkhelper.BoolProp(
-				"Skip the Rekor transparency log check (verify-blob); with a key and no bundle there is no log entry to check anyway (implicitly true for key-based verification)",
+				"Skip the Rekor transparency log check (verify-blob). Needed for key-based signatures signed without tlog_upload: they have no log entry to find",
 			),
 		},
 	)
@@ -427,7 +427,7 @@ func buildOutputSchemas() map[sdkprovider.Capability]*jsonschema.Schema {
 		sdkprovider.CapabilityAction: sdkhelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 			"success":          sdkhelper.BoolProp("Whether the operation succeeded"),
 			"verified":         sdkhelper.BoolProp("Whether the signature verified (verify-blob)"),
-			"bundle_verified":  sdkhelper.BoolProp("Whether the Rekor bundle was verified offline (verify-blob)"),
+			"bundle_verified":  sdkhelper.BoolProp("Whether the Rekor bundle was verified (verify-blob: offline bundle or online entry check)"),
 			"ref":              sdkhelper.StringProp("Signed artifact reference as given (sign)"),
 			"path":             sdkhelper.StringProp("Signed blob source file, as given (sign-blob)"),
 			"digest":           sdkhelper.StringProp("Digest of the signed subject manifest (sign) or blob (sign-blob), sha256:..."),

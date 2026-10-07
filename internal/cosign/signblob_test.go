@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	cosignopts "github.com/sigstore/cosign/v2/cmd/cosign/cli/options"
@@ -352,5 +353,27 @@ func TestSignBlob_Errors(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
+	}
+}
+
+// BenchmarkSignBlob measures the hot path: sign a 64 KiB inline blob with a
+// key-based identity (per the repo benchmarking convention for provider
+// operations).
+func BenchmarkSignBlob(b *testing.B) {
+	keyPath := benchKey(b)
+	p := &Plugin{}
+	ctx := context.Background()
+	blob := strings.Repeat("benchmark payload line\n", 2730) // ~64 KiB
+	input := map[string]any{
+		"operation": OpSignBlob,
+		"content":   blob,
+		"key":       keyPath,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := p.ExecuteProvider(ctx, ProviderName, input); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
