@@ -394,6 +394,45 @@ func TestDescribeWhatIf(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "tlog_upload")
 	})
+
+	t.Run("verify-blob key-based", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"path":        "./dist/SHA256SUMS",
+			"key":         "./cosign.pub",
+			"ignore_tlog": true,
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "Would verify ./dist/SHA256SUMS")
+		assert.Contains(t, msg, "cosign.pub")
+		assert.Contains(t, msg, "returning an error if verification fails")
+	})
+
+	t.Run("verify-blob keyless pinned identity", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":               OpVerifyBlob,
+			"path":                    "./dist/SHA256SUMS",
+			"certificate":             "./cert.pem",
+			"certificate_identity":    "https://github.com/myorg/repo/.github/workflows/release.yml@refs/tags/v1",
+			"certificate_oidc_issuer": "https://issuer.example.com",
+			"rekor_url":               "https://rekor.example.com",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "keyless identity")
+		assert.Contains(t, msg, "issued by https://issuer.example.com")
+		assert.Contains(t, msg, "rekor.example.com")
+	})
+
+	t.Run("verify-blob invalid ignore_tlog surfaces error", func(t *testing.T) {
+		_, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"content":     "x",
+			"key":         "pub",
+			"ignore_tlog": []string{"no"},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ignore_tlog")
+	})
 }
 
 func TestTlogEntryURL(t *testing.T) {
