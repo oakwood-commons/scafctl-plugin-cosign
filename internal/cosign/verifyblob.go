@@ -137,12 +137,6 @@ func (p *Plugin) executeVerifyBlob(ctx context.Context, input map[string]any) (*
 			if err = setLegacyVerifyTrust(ctx, co, cfg); err != nil {
 				return nil, err
 			}
-			// CT log keys for the embedded-SCT check on keyless certificates,
-			// via the same TUF client.
-			co.CTLogPubKeys, err = pkgcosign.GetCTLogPubs(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("verify-blob: getting CT log public keys: %w", err)
-			}
 		}
 		bundleVerified, err = p.verifyBlobLegacy(ctx, co, blobBytes, cfg, cert)
 	}
