@@ -192,6 +192,7 @@ scafctl run provider cosign operation=verify-blob \
   certificate=./dist/app.cert.pem \
   certificate_identity="release-bot@example.com" \
   certificate_oidc_issuer=https://token.actions.githubusercontent.com \
+  rekor_url=https://rekor.sigstore.dev \
   signature_path=./dist/app.tar.gz.sig
 ```
 
