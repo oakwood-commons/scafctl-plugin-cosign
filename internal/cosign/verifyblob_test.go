@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -309,6 +310,60 @@ func TestVerifyBlob_Errors(t *testing.T) {
 			_, err := p.ExecuteProvider(ctx, ProviderName, tt.input)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestVerifyBlob_ErrorPrefixOnce guards against double-prefixing: helper
+// errors reach the user only through the single outer wrap, so every
+// verify-blob error carries the "verify-blob" prefix exactly once.
+func TestVerifyBlob_ErrorPrefixOnce(t *testing.T) {
+	key := writeTestKey(t)
+	blobPath := writeBlobFile(t, "checksums.txt", "data\n")
+	pubPath := writeBlobFile(t, "cosign.pub", string(key.pubPEM))
+	p := &Plugin{}
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		input   map[string]any
+		wantSub string
+	}{
+		{
+			name: "signature not base64",
+			input: map[string]any{
+				"operation": OpVerifyBlob, "path": blobPath, "key": pubPath,
+				"signature": "%%not-base64%%", "ignore_tlog": true,
+			},
+			wantSub: "signature must be base64-encoded",
+		},
+		{
+			name: "no signature source",
+			input: map[string]any{
+				"operation": OpVerifyBlob, "path": blobPath, "key": pubPath,
+				"ignore_tlog": true,
+			},
+			wantSub: `required field "signature", "signature_path", or "bundle" is missing`,
+		},
+		{
+			name: "signature file missing",
+			input: map[string]any{
+				"operation": OpVerifyBlob, "path": blobPath, "key": pubPath,
+				"signature_path": filepath.Join(t.TempDir(), "missing.sig"),
+				"ignore_tlog":    true,
+			},
+			wantSub: "reading signature file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := p.ExecuteProvider(ctx, ProviderName, tt.input)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantSub)
+			assert.True(t, strings.HasPrefix(err.Error(), "verify-blob: "),
+				"error should carry the outer prefix: %q", err.Error())
+			assert.Equal(t, 1, strings.Count(err.Error(), "verify-blob"),
+				"verify-blob prefix must appear exactly once: %q", err.Error())
 		})
 	}
 }

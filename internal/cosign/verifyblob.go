@@ -302,13 +302,13 @@ func loadSignatureAndLegacyBundle(cfg *verifyBlobConfig) (string, *x509.Certific
 	switch {
 	case cfg.signature != "":
 		if _, err := base64.StdEncoding.DecodeString(cfg.signature); err != nil {
-			return "", nil, nil, fmt.Errorf("verify-blob: signature must be base64-encoded")
+			return "", nil, nil, fmt.Errorf("signature must be base64-encoded")
 		}
 		b64sig = cfg.signature
 	case cfg.signaturePath != "":
 		raw, err := os.ReadFile(cfg.signaturePath) //nolint:gosec // user-provided signature file
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("verify-blob: reading signature file %q: %w", cfg.signaturePath, err)
+			return "", nil, nil, fmt.Errorf("reading signature file %q: %w", cfg.signaturePath, err)
 		}
 		if isBase64(raw) {
 			b64sig = string(raw)
@@ -322,7 +322,7 @@ func loadSignatureAndLegacyBundle(cfg *verifyBlobConfig) (string, *x509.Certific
 	if cfg.bundlePath != "" {
 		lsp, err := pkgcosign.FetchLocalSignedPayloadFromPath(cfg.bundlePath)
 		if err != nil {
-			return "", nil, nil, fmt.Errorf("verify-blob: loading bundle %q: %w", cfg.bundlePath, err)
+			return "", nil, nil, fmt.Errorf("loading bundle %q: %w", cfg.bundlePath, err)
 		}
 		if lsp.Cert != "" {
 			certBytes := []byte(lsp.Cert)
@@ -331,12 +331,12 @@ func loadSignatureAndLegacyBundle(cfg *verifyBlobConfig) (string, *x509.Certific
 			}
 			cert, err = certFromPEM(certBytes)
 			if err != nil {
-				return "", nil, nil, fmt.Errorf("verify-blob: loading certificate from bundle: %w", err)
+				return "", nil, nil, fmt.Errorf("loading certificate from bundle: %w", err)
 			}
 		}
 		if b64sig == "" {
 			if lsp.Base64Signature == "" {
-				return "", nil, nil, fmt.Errorf("verify-blob: bundle %q carries no signature and none was provided", cfg.bundlePath)
+				return "", nil, nil, fmt.Errorf("bundle %q carries no signature and none was provided", cfg.bundlePath)
 			}
 			b64sig = lsp.Base64Signature
 		}
@@ -346,7 +346,7 @@ func loadSignatureAndLegacyBundle(cfg *verifyBlobConfig) (string, *x509.Certific
 	}
 
 	if b64sig == "" {
-		return "", nil, nil, fmt.Errorf(`verify-blob: required field "signature", "signature_path", or "bundle" is missing`)
+		return "", nil, nil, fmt.Errorf(`required field "signature", "signature_path", or "bundle" is missing`)
 	}
 	return b64sig, cert, bundle, nil
 }
