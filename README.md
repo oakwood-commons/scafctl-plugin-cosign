@@ -153,7 +153,7 @@ scafctl run provider cosign operation=sign-blob \
   output_signature=./dist/app.tar.gz.sig bundle_format=sigstore bundle=./dist/app.tar.sigstore.bundle
 ```
 
-The output verifies with the stock tooling: `cosign verify-blob --key cosign.pub --signature dist/SHA256SUMS.sig dist/SHA256SUMS` (interop is covered by tests sign through the plugin and verify through cosign's own command code).
+The output verifies with the stock tooling: `cosign verify-blob --key cosign.pub --signature dist/SHA256SUMS.sig dist/SHA256SUMS` (interop is covered by tests that sign through the plugin and verify through cosign's own command code)
 
 ### `verify-blob`
 
