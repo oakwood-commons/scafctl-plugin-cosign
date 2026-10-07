@@ -74,7 +74,7 @@ func (p *Plugin) GetProviderDescriptor(_ context.Context, providerName string) (
 	return &sdkprovider.Descriptor{
 		Name:        ProviderName,
 		DisplayName: "Cosign Signing Provider",
-		Description: "Daemonless OCI artifact signing with embedded sigstore libraries. Signs a pushed artifact by digest, stores the signature as an OCI 1.1 referrer, and optionally logs it to Rekor — no cosign binary required.",
+		Description: "Daemonless signing with embedded cosign/sigstore libraries: sign a pushed OCI artifact by digest (signature stored as an OCI 1.1 referrer or legacy tag), sign a plain blob with a detached signature (legacy or sigstore bundle), and verify a blob signature against a public key or a pinned keyless identity — all optionally logged to Rekor, no cosign binary required.",
 		APIVersion:  "v1",
 		Version:     parsedVersion,
 		Category:    "security",
