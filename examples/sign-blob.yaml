@@ -1,0 +1,87 @@
+# Example: Sign and verify a release checksum file (a plain blob).
+#
+# Chains the cosign provider's sign-blob with verify-blob: sign-blob writes
+# a detached base64 signature plus a legacy bundle next to the checksum file,
+# and verify-blob asserts the signature against the public key — a failed
+# check stops the workflow before anything is published.
+#
+# Setup:
+#   # A cosign key pair, with the key material itself in the env vars
+#   # (an env://VAR reference hands cosign the var's CONTENT as the PEM,
+#   # not a path to it):
+#   cosign generate-key-pair && cosign public-key --key cosign.key > cosign.pub
+#   export COSIGN_SIGNING_KEY="$(cat cosign.key)"
+#   export COSIGN_PUBLIC_KEY_PEM="$(cat cosign.pub)"
+#
+# Run:
+#   scafctl run solution -f examples/sign-blob.yaml
+apiVersion: scafctl.io/v1
+kind: Solution
+metadata:
+  name: cosign-sign-blob-example
+  version: 1.0.0
+  description: Sign a checksum file with a detached signature, then assert it.
+
+bundle:
+  plugins:
+    - name: cosign
+      kind: provider
+      version: ">=0.2.0"
+
+spec:
+  resolvers:
+    checksumFile:
+      type: string
+      description: Checksum file to sign (SHA256SUMS-style)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: ./dist/SHA256SUMS
+
+    signingKey:
+      type: string
+      description: cosign private key reference (file path, env://VAR, k8s://secret, or KMS ref)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: env://COSIGN_SIGNING_KEY
+
+    publicVerifier:
+      type: string
+      description: Public key reference used to assert the signature (the signer's public half)
+      resolve:
+        with:
+          - provider: static
+            inputs:
+              value: env://COSIGN_PUBLIC_KEY_PEM
+
+  workflow:
+    actions:
+      sign-checksums:
+        description: Sign the checksum file with a detached signature and a bundle
+        provider: cosign
+        inputs:
+          operation: sign-blob
+          path: "{{ .resolvers.checksumFile }}"
+          key: "{{ .resolvers.signingKey }}"
+          output_signature: "{{ .resolvers.checksumFile }}.sig"
+          bundle: "{{ .resolvers.checksumFile }}.bundle"
+          bundle_format: legacy
+          # For keyless signing instead, drop key and set:
+          #   fulcio_url: https://fulcio.sigstore.dev
+          #   rekor_url: https://rekor.sigstore.dev
+
+      verify-checksums:
+        description: Assert the detached signature before publishing (fails the workflow if not)
+        needs: [sign-checksums]
+        provider: cosign
+        inputs:
+          operation: verify-blob
+          path: "{{ .resolvers.checksumFile }}"
+          key: "{{ .resolvers.publicVerifier }}"
+          signature_path: "{{ .resolvers.checksumFile }}.sig"
+          bundle: "{{ .resolvers.checksumFile }}.bundle"
+          # No rekor_url/tlog entry in this key-based flow, so skip the log check.
+          ignore_tlog: true

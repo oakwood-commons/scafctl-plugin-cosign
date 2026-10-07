@@ -33,7 +33,7 @@ func TestGetProviderDescriptor(t *testing.T) {
 		assert.NotEmpty(t, desc.Description)
 		assert.NotNil(t, desc.Schema)
 		assert.Equal(t, []sdkprovider.Capability{sdkprovider.CapabilityAction}, desc.Capabilities)
-		assert.Equal(t, []string{OpSign}, desc.WriteOperations)
+		assert.Equal(t, []string{OpSign, OpSignBlob}, desc.WriteOperations)
 		assert.Equal(t, "security", desc.Category)
 		assert.NotNil(t, desc.OutputSchemas, "OutputSchemas must be present")
 		for _, cap := range desc.Capabilities {
@@ -353,6 +353,96 @@ func TestDescribeWhatIf(t *testing.T) {
 		})
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "keyless")
+	})
+
+	t.Run("sign-blob key-based with outputs", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":        OpSignBlob,
+			"path":             "./dist/SHA256SUMS",
+			"key":              "./cosign.key",
+			"output_signature": "./dist/SHA256SUMS.sig",
+			"bundle":           "./dist/SHA256SUMS.bundle",
+			"bundle_format":    BundleFormatSigstore,
+			"rekor_url":        "https://rekor.example.com",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "./dist/SHA256SUMS")
+		assert.Contains(t, msg, "key-based")
+		assert.Contains(t, msg, "./dist/SHA256SUMS.sig")
+		assert.Contains(t, msg, "sigstore-format bundle")
+		assert.Contains(t, msg, "rekor.example.com")
+	})
+
+	t.Run("sign-blob inline content keyless", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":  OpSignBlob,
+			"content":    "inline",
+			"fulcio_url": "https://fulcio.example.com",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "Would sign the blob")
+		assert.Contains(t, msg, "keyless")
+		assert.Contains(t, msg, "detached base64 signature")
+	})
+
+	t.Run("sign-blob invalid tlog type surfaces error", func(t *testing.T) {
+		_, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpSignBlob,
+			"content":     "x",
+			"tlog_upload": "not-a-bool",
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "tlog_upload")
+	})
+
+	t.Run("verify-blob key-based", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"path":        "./dist/SHA256SUMS",
+			"key":         "./cosign.pub",
+			"ignore_tlog": true,
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "Would verify ./dist/SHA256SUMS")
+		assert.Contains(t, msg, "cosign.pub")
+		assert.Contains(t, msg, "returning an error if verification fails")
+	})
+
+	t.Run("verify-blob string ignore_tlog coerced like execution", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"path":        "./dist/SHA256SUMS",
+			"key":         "./cosign.pub",
+			"ignore_tlog": "true",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "without checking the Rekor transparency log")
+	})
+
+	t.Run("verify-blob keyless pinned identity", func(t *testing.T) {
+		msg, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":               OpVerifyBlob,
+			"path":                    "./dist/SHA256SUMS",
+			"certificate":             "./cert.pem",
+			"certificate_identity":    "https://github.com/myorg/repo/.github/workflows/release.yml@refs/tags/v1",
+			"certificate_oidc_issuer": "https://issuer.example.com",
+			"rekor_url":               "https://rekor.example.com",
+		})
+		require.NoError(t, err)
+		assert.Contains(t, msg, "keyless identity")
+		assert.Contains(t, msg, "issued by https://issuer.example.com")
+		assert.Contains(t, msg, "rekor.example.com")
+	})
+
+	t.Run("verify-blob invalid ignore_tlog surfaces error", func(t *testing.T) {
+		_, err := p.DescribeWhatIf(ctx, ProviderName, map[string]any{
+			"operation":   OpVerifyBlob,
+			"content":     "x",
+			"key":         "pub",
+			"ignore_tlog": []string{"no"},
+		})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ignore_tlog")
 	})
 }
 

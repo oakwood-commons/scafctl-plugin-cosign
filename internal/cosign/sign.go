@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"os"
 	"strconv"
 	"strings"
@@ -58,9 +59,9 @@ const (
 	cosignSignatureArtifactType = "application/vnd.dev.cosign.artifact.sig.v1+json"
 )
 
-// signConfig holds the resolved, validated inputs of the sign operation.
-type signConfig struct {
-	ref              string
+// signIdentity holds the resolved, validated signing-identity inputs shared
+// by the sign and sign-blob operations.
+type signIdentity struct {
 	key              string
 	keyless          bool
 	oidcHandler      string
@@ -68,9 +69,15 @@ type signConfig struct {
 	rekorURL         string
 	tlogUpload       bool
 	skipFulcioVerify bool
-	referrersMode    string
-	annotations      map[string]string
-	recursive        bool
+}
+
+// signConfig holds the resolved, validated inputs of the sign operation.
+type signConfig struct {
+	signIdentity
+	ref           string
+	referrersMode string
+	annotations   map[string]string
+	recursive     bool
 }
 
 // signer carries the signing identity for one executeSign call.
@@ -130,7 +137,7 @@ func (p *Plugin) executeSign(ctx context.Context, input map[string]any) (*sdkpro
 
 	// Build the signer before touching the registry so a bad key or missing
 	// identity fails fast, without network side effects first.
-	sign, err := p.buildSigner(ctx, cfg)
+	sign, err := p.buildSigner(ctx, &cfg.signIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +232,11 @@ func (p *Plugin) signOne(ctx context.Context, cfg *signConfig, sign *signer, dig
 	if err != nil {
 		return res, fmt.Errorf("building signature payload: %w", err)
 	}
-	res.payloadDigest = "sha256:" + hex.EncodeToString(sha256Sum(payload))
+	payloadHash := sha256.New()
+	if _, err := payloadHash.Write(payload); err != nil { //nolint:errcheck // sha256 Write never fails
+		return res, err
+	}
+	res.payloadDigest = "sha256:" + hex.EncodeToString(payloadHash.Sum(nil))
 
 	sig, err := sign.sv.SignMessage(bytes.NewReader(payload), signatureoptions.WithContext(ctx))
 	if err != nil {
@@ -242,7 +253,7 @@ func (p *Plugin) signOne(ctx context.Context, cfg *signConfig, sign *signer, dig
 		}
 	}
 	if rekorClient != nil {
-		entry, uerr := p.uploadToRekor(ctx, sign, sig, payload, rekorClient)
+		entry, uerr := p.uploadToRekor(ctx, sign, sig, payloadHash, rekorClient)
 		if uerr != nil {
 			return res, fmt.Errorf("uploading to transparency log: %w", uerr)
 		}
@@ -289,8 +300,10 @@ func (p *Plugin) signOne(ctx context.Context, cfg *signConfig, sign *signer, dig
 
 // uploadToRekor writes the signature to the Rekor transparency log, using
 // the signing certificate (keyless; already PEM from Fulcio) or the public
-// key (key-based) as the identity material, exactly as cosign does.
-func (p *Plugin) uploadToRekor(ctx context.Context, sign *signer, sig, payload []byte, rc *client.Rekor) (*models.LogEntryAnon, error) {
+// key (key-based) as the identity material, exactly as cosign does. The
+// caller supplies the hash of the signed bytes, so large blobs never need to
+// be held in memory a second time.
+func (p *Plugin) uploadToRekor(ctx context.Context, sign *signer, sig []byte, blobHash hash.Hash, rc *client.Rekor) (*models.LogEntryAnon, error) {
 	var rekorBytes []byte
 	var err error
 	if sign.cert != nil {
@@ -301,11 +314,7 @@ func (p *Plugin) uploadToRekor(ctx context.Context, sign *signer, sig, payload [
 			return nil, fmt.Errorf("marshaling public key: %w", err)
 		}
 	}
-	checkSum := sha256.New()
-	if _, err := checkSum.Write(payload); err != nil { //nolint:errcheck // sha256 Write never fails
-		return nil, err
-	}
-	return pkgcosign.TLogUpload(ctx, rc, sig, checkSum, rekorBytes)
+	return pkgcosign.TLogUpload(ctx, rc, sig, blobHash, rekorBytes)
 }
 
 // lookupReferrerSignatureDigest finds the signature referrer manifest that
@@ -367,16 +376,16 @@ func containsLayer(rawManifest []byte, payloadDigest string) bool {
 
 // buildSigner constructs the signing identity: a key from the key reference,
 // or an ephemeral key certified by Fulcio for keyless signing.
-func (p *Plugin) buildSigner(ctx context.Context, cfg *signConfig) (*signer, error) {
-	if !cfg.keyless {
-		sv, err := sigs.SignerVerifierFromKeyRef(ctx, cfg.key, passFunc, nil)
+func (p *Plugin) buildSigner(ctx context.Context, id *signIdentity) (*signer, error) {
+	if !id.keyless {
+		sv, err := sigs.SignerVerifierFromKeyRef(ctx, id.key, passFunc, nil)
 		if err != nil {
-			return nil, fmt.Errorf("loading key %q: %w", cfg.key, err)
+			return nil, fmt.Errorf("loading key %q: %w", id.key, err)
 		}
 		return &signer{sv: sv}, nil
 	}
 
-	idToken, err := p.oidcToken(ctx, cfg.oidcHandler)
+	idToken, err := p.oidcToken(ctx, id.oidcHandler)
 	if err != nil {
 		return nil, fmt.Errorf("getting OIDC identity: %w", err)
 	}
@@ -391,13 +400,13 @@ func (p *Plugin) buildSigner(ctx context.Context, cfg *signConfig) (*signer, err
 	}
 
 	ko := cosignopts.KeyOpts{
-		FulcioURL:                cfg.fulcioURL,
+		FulcioURL:                id.fulcioURL,
 		IDToken:                  idToken,
 		SkipConfirmation:         true,
-		InsecureSkipFulcioVerify: cfg.skipFulcioVerify,
+		InsecureSkipFulcioVerify: id.skipFulcioVerify,
 	}
 	var fs *fulcio.Signer
-	if cfg.skipFulcioVerify {
+	if id.skipFulcioVerify {
 		fs, err = fulcio.NewSigner(ctx, ko, sv)
 	} else {
 		fs, err = fulcioverifier.NewSigner(ctx, ko, sv)
@@ -444,6 +453,65 @@ func (p *Plugin) oidcToken(ctx context.Context, handler string) (string, error) 
 	return "", errors.New(detail)
 }
 
+// parseSignIdentity resolves and validates the signing-identity inputs the
+// sign and sign-blob operations share: key vs keyless selection, the Fulcio
+// and Rekor endpoints, and the transparency-log upload decision. It performs
+// no I/O so validation errors are deterministic.
+func parseSignIdentity(input map[string]any) (*signIdentity, error) {
+	id := &signIdentity{}
+	id.key, _ = input["key"].(string)
+	if err := validateKeyRef(id.key); err != nil {
+		return nil, err
+	}
+	id.oidcHandler, _ = input["oidc_handler"].(string)
+	id.rekorURL, _ = input["rekor_url"].(string)
+
+	if raw, ok := input["keyless"]; ok {
+		b, err := toBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid keyless: %w", err)
+		}
+		if b && id.key != "" {
+			return nil, fmt.Errorf("set only one of key or keyless, not both")
+		}
+		if !b && id.key == "" {
+			return nil, fmt.Errorf("keyless: false requires a key")
+		}
+		id.keyless = b
+	} else {
+		id.keyless = id.key == ""
+	}
+
+	if id.keyless {
+		id.fulcioURL, _ = input["fulcio_url"].(string)
+		if id.fulcioURL == "" {
+			return nil, fmt.Errorf("fulcio_url is required for keyless signing")
+		}
+		if raw, ok := input["fulcio_insecure_skip_verify"]; ok {
+			b, err := toBool(raw)
+			if err != nil {
+				return nil, fmt.Errorf("invalid fulcio_insecure_skip_verify: %w", err)
+			}
+			id.skipFulcioVerify = b
+		}
+	}
+
+	if raw, ok := input["tlog_upload"]; ok {
+		b, err := toBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid tlog_upload: %w", err)
+		}
+		id.tlogUpload = b
+	} else {
+		id.tlogUpload = id.keyless || id.rekorURL != ""
+	}
+	if id.tlogUpload && id.rekorURL == "" {
+		return nil, fmt.Errorf("tlog_upload requires a rekor_url (no endpoint is hardcoded)")
+	}
+
+	return id, nil
+}
+
 // parseSignConfig resolves and validates the sign operation inputs. It
 // performs no I/O so validation errors are deterministic.
 func parseSignConfig(input map[string]any) (*signConfig, error) {
@@ -453,52 +521,12 @@ func parseSignConfig(input map[string]any) (*signConfig, error) {
 	}
 
 	cfg := &signConfig{ref: refStr}
-	cfg.key, _ = input["key"].(string)
-	cfg.oidcHandler, _ = input["oidc_handler"].(string)
-	cfg.rekorURL, _ = input["rekor_url"].(string)
 
-	if raw, ok := input["keyless"]; ok {
-		b, err := toBool(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid keyless: %w", err)
-		}
-		if b && cfg.key != "" {
-			return nil, fmt.Errorf("set only one of key or keyless, not both")
-		}
-		if !b && cfg.key == "" {
-			return nil, fmt.Errorf("keyless: false requires a key")
-		}
-		cfg.keyless = b
-	} else {
-		cfg.keyless = cfg.key == ""
+	id, err := parseSignIdentity(input)
+	if err != nil {
+		return nil, err
 	}
-
-	if cfg.keyless {
-		cfg.fulcioURL, _ = input["fulcio_url"].(string)
-		if cfg.fulcioURL == "" {
-			return nil, fmt.Errorf("fulcio_url is required for keyless signing")
-		}
-		if raw, ok := input["fulcio_insecure_skip_verify"]; ok {
-			b, err := toBool(raw)
-			if err != nil {
-				return nil, fmt.Errorf("invalid fulcio_insecure_skip_verify: %w", err)
-			}
-			cfg.skipFulcioVerify = b
-		}
-	}
-
-	if raw, ok := input["tlog_upload"]; ok {
-		b, err := toBool(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid tlog_upload: %w", err)
-		}
-		cfg.tlogUpload = b
-	} else {
-		cfg.tlogUpload = cfg.keyless || cfg.rekorURL != ""
-	}
-	if cfg.tlogUpload && cfg.rekorURL == "" {
-		return nil, fmt.Errorf("tlog_upload requires a rekor_url (no endpoint is hardcoded)")
-	}
+	cfg.signIdentity = *id
 
 	mode, _ := input["referrers_mode"].(string)
 	switch strings.ToLower(strings.TrimSpace(mode)) {
@@ -586,10 +614,4 @@ func (p *Plugin) parseReference(ref string) (name.Reference, error) {
 		return nil, fmt.Errorf("parsing reference %q: %w", ref, err)
 	}
 	return parsed, nil
-}
-
-// sha256Sum is a tiny helper returning the SHA-256 digest bytes of b.
-func sha256Sum(b []byte) []byte {
-	h := sha256.Sum256(b)
-	return h[:]
 }

@@ -28,6 +28,13 @@ var version = "0.1.0"
 // Operations supported by the cosign provider.
 const (
 	OpSign = "sign"
+	// OpSignBlob signs a plain blob (checksum file, tarball) and writes a
+	// detached signature, mirroring `cosign sign-blob` in-process.
+	OpSignBlob = "sign-blob"
+	// OpVerifyBlob checks a detached blob signature against a public key or
+	// a keyless identity/issuer pair, mirroring `cosign verify-blob`
+	// in-process. Read-only: not on WriteOperations.
+	OpVerifyBlob = "verify-blob"
 )
 
 // Plugin implements the scafctl ProviderPlugin interface.
@@ -67,14 +74,14 @@ func (p *Plugin) GetProviderDescriptor(_ context.Context, providerName string) (
 	return &sdkprovider.Descriptor{
 		Name:        ProviderName,
 		DisplayName: "Cosign Signing Provider",
-		Description: "Daemonless OCI artifact signing with embedded sigstore libraries. Signs a pushed artifact by digest, stores the signature as an OCI 1.1 referrer, and optionally logs it to Rekor — no cosign binary required.",
+		Description: "Daemonless signing with embedded cosign/sigstore libraries: sign a pushed OCI artifact by digest (signature stored as an OCI 1.1 referrer or legacy tag), sign a plain blob with a detached signature (legacy or sigstore bundle), and verify a blob signature against a public key or a pinned keyless identity — all optionally logged to Rekor, no cosign binary required.",
 		APIVersion:  "v1",
 		Version:     parsedVersion,
 		Category:    "security",
 		Capabilities: []sdkprovider.Capability{
 			sdkprovider.CapabilityAction,
 		},
-		WriteOperations: []string{OpSign},
+		WriteOperations: []string{OpSign, OpSignBlob},
 		Schema:          buildInputSchema(),
 		OutputSchemas:   buildOutputSchemas(),
 	}, nil
@@ -98,6 +105,10 @@ func (p *Plugin) ExecuteProvider(ctx context.Context, providerName string, input
 	switch op {
 	case OpSign:
 		return p.executeSign(ctx, input)
+	case OpSignBlob:
+		return p.executeSignBlob(ctx, input)
+	case OpVerifyBlob:
+		return p.executeVerifyBlob(ctx, input)
 	default:
 		return nil, fmt.Errorf("unknown operation: %s", op)
 	}
@@ -155,6 +166,91 @@ func (p *Plugin) DescribeWhatIf(_ context.Context, providerName string, input ma
 		if n := countAnnotations(input); n > 0 {
 			parts = append(parts, fmt.Sprintf("with %d annotation(s)", n))
 		}
+		return strings.Join(parts, ", "), nil
+	case OpSignBlob:
+		if err := whatIfBool(input, "keyless"); err != nil {
+			return "", err
+		}
+		if err := whatIfBool(input, "tlog_upload"); err != nil {
+			return "", err
+		}
+
+		key, _ := input["key"].(string)
+		rekorURL, _ := input["rekor_url"].(string)
+		who := "keyless (OIDC identity via Fulcio)"
+		if key != "" {
+			who = fmt.Sprintf("key-based key %s", key)
+		}
+
+		parts := []string{"Would sign the blob"}
+		if path, _ := input["path"].(string); path != "" {
+			parts[0] = fmt.Sprintf("Would sign %s", path)
+		}
+		parts[0] = fmt.Sprintf("%s using %s", parts[0], who)
+		parts = append(parts, "writing the detached base64 signature to the output data")
+		if v, _ := input["output_signature"].(string); v != "" {
+			parts = append(parts, fmt.Sprintf("and the signature file %s", v))
+		}
+		if v, _ := input["bundle"].(string); v != "" {
+			format, _ := input["bundle_format"].(string)
+			mode := "legacy"
+			if strings.ToLower(strings.TrimSpace(format)) == BundleFormatSigstore {
+				mode = BundleFormatSigstore
+			}
+			parts = append(parts, fmt.Sprintf("and a %s-format bundle at %s", mode, v))
+		}
+		if rekorURL != "" {
+			parts = append(parts, fmt.Sprintf("and logging it to Rekor at %s", rekorURL))
+		}
+		return strings.Join(parts, ", "), nil
+	case OpVerifyBlob:
+		if err := whatIfBool(input, "ignore_tlog"); err != nil {
+			return "", err
+		}
+
+		parts := []string{"Would verify the blob"}
+		if path, _ := input["path"].(string); path != "" {
+			parts[0] = fmt.Sprintf("Would verify %s", path)
+		}
+
+		key, _ := input["key"].(string)
+		identity, _ := input["certificate_identity"].(string)
+		issuer, _ := input["certificate_oidc_issuer"].(string)
+		bundle, _ := input["bundle"].(string)
+		switch {
+		case key != "":
+			parts = append(parts, fmt.Sprintf("against the public key %s", key))
+		case identity != "" || issuer != "":
+			who := "a pinned keyless identity"
+			if identity != "" {
+				who = fmt.Sprintf("the keyless identity %s", identity)
+			}
+			parts = append(parts, who)
+			if issuer != "" {
+				parts = append(parts, fmt.Sprintf("issued by %s", issuer))
+			}
+		case bundle != "":
+			parts = append(parts, "against the certificate in the bundle with a pinned identity")
+		}
+		if bundle != "" {
+			parts = append(parts, fmt.Sprintf("using the bundle %s when needed", bundle))
+		}
+
+		// Coerce like the execution path (parseVerifyBlobConfig) rather
+		// than a raw .(bool) assert, so a string ignore_tlog=true from
+		// the CLI describes the tlog skip correctly here too. Type
+		// validity was already checked by whatIfBool above.
+		ignoreTlog := false
+		if raw, ok := input["ignore_tlog"]; ok {
+			ignoreTlog, _ = toBool(raw)
+		}
+		if ignoreTlog {
+			parts = append(parts, "without checking the Rekor transparency log")
+		} else if rekorURL, _ := input["rekor_url"].(string); rekorURL != "" {
+			parts = append(parts, fmt.Sprintf("and checking the Rekor transparency log at %s", rekorURL))
+		}
+
+		parts = append(parts, "returning an error if verification fails, stopping the workflow")
 		return strings.Join(parts, ", "), nil
 	default:
 		return fmt.Sprintf("Would perform unknown operation %q", op), nil
@@ -225,11 +321,18 @@ func buildInputSchema() *jsonschema.Schema {
 		map[string]*jsonschema.Schema{
 			"operation": sdkhelper.StringProp(
 				"The operation to perform",
-				sdkhelper.WithEnum(OpSign),
+				sdkhelper.WithEnum(OpSign, OpSignBlob, OpVerifyBlob),
 			),
 			"ref": sdkhelper.StringProp(
-				"Artifact to sign. A digest ref (repo@sha256:...) is signed as-is; a tag ref (repo:tag) is resolved to its digest first, and the digest is what gets signed",
+				"Artifact to sign (sign operation). A digest ref (repo@sha256:...) is signed as-is; a tag ref (repo:tag) is resolved to its digest first, and the digest is what gets signed",
 				sdkhelper.WithExample("ghcr.io/myorg/myapp@sha256:abc123..."),
+			),
+			"path": sdkhelper.StringProp(
+				"Blob source for sign-blob and verify-blob: a local file path (sign-blob streams it through the signer; verify-blob reads it into memory, like cosign's blobRef)",
+				sdkhelper.WithExample("./dist/SHA256SUMS"),
+			),
+			"content": sdkhelper.StringProp(
+				"Inline blob content. Set exactly one of path or content",
 			),
 			"key": sdkhelper.StringProp(
 				"cosign key reference for key-based signing: a file path, env://VAR, k8s://namespace/secret, or a KMS reference. Omit for keyless (OIDC) signing",
@@ -267,8 +370,60 @@ func buildInputSchema() *jsonschema.Schema {
 				"Skip Fulcio's client-side SCT verification. Needed for private Fulcio deployments whose CT log keys are not in the public sigstore TUF root",
 			),
 			"retry": sdkhelper.AnyProp(
-				"Retry tuning for signature registry writes. Accepts true to enable defaults, an integer " +
+				"Retry tuning for signature registry writes (sign operation). Accepts true to enable defaults, an integer " +
 					"attempt count, or a map {attempts: int, backoff: \"1s\", maxBackoff: \"30s\"}. Defaults retry 408/429/5xx responses",
+			),
+			"output_signature": sdkhelper.StringProp(
+				"File to write the detached base64 signature to (sign-blob)",
+				sdkhelper.WithExample("./dist/SHA256SUMS.sig"),
+			),
+			"output_certificate": sdkhelper.StringProp(
+				"File to write the Fulcio certificate PEM to (sign-blob, keyless only)",
+			),
+			"bundle": sdkhelper.StringProp(
+				"Signature bundle path: sign-blob writes the bundle here (see bundle_format); verify-blob reads its verification material from it",
+			),
+			"bundle_format": sdkhelper.StringProp(
+				"Bundle format: legacy (default, cosign sign-blob --bundle JSON) or sigstore (protobuf bundle, --new-bundle-format; verify-blob requires trusted_root with it)",
+				sdkhelper.WithEnum(BundleFormatLegacy, BundleFormatSigstore),
+			),
+			"signature": sdkhelper.StringProp(
+				"Detached base64 signature, inline (verify-blob)",
+			),
+			"signature_path": sdkhelper.StringProp(
+				"File holding the detached signature: base64 or raw bytes, encoded as needed (verify-blob)",
+			),
+			"certificate": sdkhelper.StringProp(
+				"PEM (or base64-wrapped PEM) certificate file to verify a keyless signature against (verify-blob)",
+			),
+			"certificate_identity": sdkhelper.StringProp(
+				"Identity expected in the signing certificate: email, DNS name, IP, or URI (verify-blob, keyless required)",
+				sdkhelper.WithExample("https://github.com/myorg/.github/workflows/release.yml@refs/tags/v1.0.0"),
+			),
+			"certificate_identity_regexp": sdkhelper.StringProp(
+				"Go regexp alternative to certificate_identity (verify-blob, keyless)",
+			),
+			"certificate_oidc_issuer": sdkhelper.StringProp(
+				"OIDC issuer expected in the signing certificate (verify-blob, keyless required)",
+				sdkhelper.WithExample("https://token.actions.githubusercontent.com"),
+			),
+			"certificate_oidc_issuer_regexp": sdkhelper.StringProp(
+				"Go regexp alternative to certificate_oidc_issuer (verify-blob, keyless)",
+			),
+			"ca_roots": sdkhelper.StringProp(
+				"PEM file of CA roots to verify a private Fulcio certificate chain against (verify-blob legacy path)",
+			),
+			"ca_intermediates": sdkhelper.StringProp(
+				"PEM file of intermediate CA certificates; use together with ca_roots (verify-blob legacy path)",
+			),
+			"certificate_chain": sdkhelper.StringProp(
+				"PEM chain file from the signing certificate's parent intermediate to the root (verify-blob legacy path)",
+			),
+			"trusted_root": sdkhelper.StringProp(
+				"Path to a sigstore trusted_root.json; required with bundle_format sigstore (verify-blob)",
+			),
+			"ignore_tlog": sdkhelper.BoolProp(
+				"Skip the Rekor transparency log check (verify-blob). Needed for key-based signatures signed without tlog_upload: they have no log entry to find",
 			),
 		},
 	)
@@ -278,12 +433,20 @@ func buildOutputSchemas() map[sdkprovider.Capability]*jsonschema.Schema {
 	return map[sdkprovider.Capability]*jsonschema.Schema{
 		sdkprovider.CapabilityAction: sdkhelper.ObjectSchema(nil, map[string]*jsonschema.Schema{
 			"success":          sdkhelper.BoolProp("Whether the operation succeeded"),
-			"ref":              sdkhelper.StringProp("Signed artifact reference as given"),
-			"digest":           sdkhelper.StringProp("Digest of the signed subject manifest (sha256:...)"),
-			"mediaType":        sdkhelper.StringProp("Signed subject manifest media type"),
+			"verified":         sdkhelper.BoolProp("Whether the signature verified (verify-blob)"),
+			"bundle_verified":  sdkhelper.BoolProp("Whether the Rekor bundle was verified (verify-blob: offline bundle or online entry check)"),
+			"ref":              sdkhelper.StringProp("Signed artifact reference as given (sign)"),
+			"path":             sdkhelper.StringProp("Signed blob source file, as given (sign-blob)"),
+			"digest":           sdkhelper.StringProp("Digest of the signed subject manifest (sign) or blob (sign-blob), sha256:..."),
+			"mediaType":        sdkhelper.StringProp("Signed subject manifest media type (sign)"),
+			"signature":        sdkhelper.StringProp("Detached base64 signature (sign-blob)"),
 			"signature_digest": sdkhelper.StringProp("Digest of the signature artifact: the referrer manifest (oci-1-1) or the signature image (legacy)"),
 			"signed_digests":   sdkhelper.ArrayProp("All digests signed (subject plus child manifests when recursive)", sdkhelper.WithItems(sdkhelper.StringProp("sha256:..."))),
 			"referrers_mode":   sdkhelper.StringProp("Referrers mode used (oci-1-1 or legacy)"),
+			"signature_path":   sdkhelper.StringProp("File the detached signature was written to (sign-blob)"),
+			"certificate_path": sdkhelper.StringProp("File the Fulcio certificate was written to (sign-blob, keyless)"),
+			"bundle_path":      sdkhelper.StringProp("File the signature bundle was written to (sign-blob)"),
+			"bundle_format":    sdkhelper.StringProp("Bundle format written (legacy or sigstore)"),
 			"tlog_index":       sdkhelper.IntProp("Rekor transparency log index of the signature entry, when uploaded"),
 			"tlog_url":         sdkhelper.StringProp("URL of the Rekor entry, when uploaded"),
 			"certificate":      sdkhelper.StringProp("PEM of the Fulcio-issued ephemeral signing certificate (keyless only)"),
