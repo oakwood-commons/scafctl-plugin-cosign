@@ -1,6 +1,6 @@
 # scafctl-plugin-cosign
 
-A scafctl provider plugin for in-process signing with embedded cosign/sigstore libraries. Sign an already-pushed OCI artifact by digest (signature stored as an OCI 1.1 referrer), sign a plain blob with a detached signature (checksum files, tarballs), verify both against a public key or a pinned keyless identity — without a `cosign` binary, a container runtime, or a statically managed key in CI.
+A scafctl provider plugin for in-process signing with embedded cosign/sigstore libraries. Sign an already-pushed OCI artifact by digest (signature stored as an OCI 1.1 referrer), sign a plain blob with a detached signature (checksum files, tarballs), verify blob signatures against a public key or a pinned keyless identity — without a `cosign` binary, a container runtime, or a statically managed key in CI.
 
 This plugin covers the **signing half** of a daemonless push-then-sign flow. Pair it with the `oci` provider: `push` / `push-artifact` publishes the content, `cosign` signs the published digest — and `sign-blob` / `verify-blob` cover the non-container release artifacts (signing `SHA256SUMS`, goreleaser-style assets).
 
