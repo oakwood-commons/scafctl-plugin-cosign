@@ -129,10 +129,9 @@ jobs:
             --platform "darwin/arm64=dist/${BINARY}-darwin-arm64" \
             --platform "windows/amd64=dist/${BINARY}-windows-amd64.exe"
 
-          scafctl catalog push \
+          scafctl catalog push provider \
             "cosign@${VERSION}" \
             --catalog "oci://ghcr.io/${{ github.repository_owner }}" \
-            --kind "provider" \
             --force
 
           # Resolve the pushed manifest digest for cosign signing
